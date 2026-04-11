@@ -7,15 +7,17 @@ on:
     branches: [main]
     types: [opened, synchronize, reopened]
 
-permissions:
-  id-token: write   # richiesto per OIDC
-  contents: read
-
 jobs:
   deploy:
     name: Build & Deploy
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    concurrency:
+      group: deploy-main
+      cancel-in-progress: false  # non cancellare deploy in corso, accodarli
 
     steps:
       - uses: actions/checkout@v4
@@ -72,6 +74,8 @@ jobs:
     name: Trigger smoke tests
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Genera token GitHub App
