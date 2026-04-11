@@ -1,0 +1,38 @@
+name: Promote
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Ambiente di destinazione'
+        required: true
+        type: choice
+        options:
+          - dev
+          - staging
+          - production
+      version:
+        description: 'Versione da promuovere (es. sha commit o tag)'
+        required: true
+        default: 'latest'
+
+jobs:
+  promote:
+    name: 'Deploy ${{ inputs.version }} → ${{ inputs.environment }}'
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment }}
+      url: https://d1xt02c9msoncr.cloudfront.net
+
+    steps:
+      - name: 'Simula promote su ${{ inputs.environment }}'
+        run: |
+          echo "▶ Promuovo versione: ${{ inputs.version }}"
+          echo "▶ Ambiente target:   ${{ inputs.environment }}"
+          echo "▶ Avviato da:        ${{ github.actor }}"
+          echo "▶ Timestamp:         $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo ""
+          echo "In un setup reale qui andrebbero i comandi per:"
+          echo "  - Pullare l'artifact già buildato (da S3, ECR, GitHub Packages...)"
+          echo "  - Deployarlo sull'ambiente ${{ inputs.environment }}"
+          echo "  - Aggiornare le variabili di configurazione per l'ambiente"
