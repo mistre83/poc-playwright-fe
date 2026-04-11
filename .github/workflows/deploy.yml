@@ -71,7 +71,7 @@ jobs:
             -H "Accept: application/vnd.github+json" \
             -H "Authorization: Bearer ${{ steps.app-token.outputs.token }}" \
             https://api.github.com/repos/${{ github.repository_owner }}/e2e-playwright/dispatches \
-            -d '{"event_type":"deployment-complete","client_payload":{"sha":"${{ github.sha }}","ref":"${{ github.ref_name }}"}}'
+            -d '{"event_type":"deployment-complete","client_payload":{"sha":"${{ github.sha }}","ref":"${{ github.ref_name }}","pr_number":${{ github.event.pull_request.number || 0 }}}}'
 
   trigger-smoke:
     name: Trigger smoke tests
