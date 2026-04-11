@@ -3,6 +3,9 @@ name: Deploy
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
 
 permissions:
   id-token: write   # richiesto per OIDC
@@ -11,6 +14,7 @@ permissions:
 jobs:
   deploy:
     name: Build & Deploy
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
 
     steps:
@@ -56,10 +60,40 @@ jobs:
           installation_retrieval_mode: repository
           installation_retrieval_payload: ${{ github.repository_owner }}/e2e-playwright
 
-      - name: Triggera test E2E
+      - name: Triggera suite E2E completa
         run: |
           curl -X POST \
             -H "Accept: application/vnd.github+json" \
             -H "Authorization: Bearer ${{ steps.app-token.outputs.token }}" \
             https://api.github.com/repos/${{ github.repository_owner }}/e2e-playwright/dispatches \
             -d '{"event_type":"deployment-complete","client_payload":{"sha":"${{ github.sha }}","ref":"${{ github.ref_name }}"}}'
+
+  trigger-smoke:
+    name: Trigger smoke tests
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Genera token GitHub App
+        id: app-token
+        uses: tibdex/github-app-token@v2
+        with:
+          app_id: ${{ secrets.APP_ID }}
+          private_key: ${{ secrets.APP_PRIVATE_KEY }}
+          installation_retrieval_mode: repository
+          installation_retrieval_payload: ${{ github.repository_owner }}/e2e-playwright
+
+      - name: Triggera smoke tests
+        run: |
+          curl -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ steps.app-token.outputs.token }}" \
+            https://api.github.com/repos/${{ github.repository_owner }}/e2e-playwright/dispatches \
+            -d '{
+              "event_type": "smoke-requested",
+              "client_payload": {
+                "sha": "${{ github.event.pull_request.head.sha }}",
+                "pr_number": ${{ github.event.number }},
+                "repository": "${{ github.repository }}"
+              }
+            }'
