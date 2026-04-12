@@ -3,12 +3,15 @@ name: Build & Deploy Staging
 on:
   push:
     branches: [main]
+    paths:
+      - 'src/**'
+      - 'public/**'
+      - 'Dockerfile'
+      - 'package-lock.json'
 
 jobs:
   build:
     name: Build & push to ECR
-    # Skip version bump commits from release-please — no code changes, no build needed
-    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     permissions:
       id-token: write
