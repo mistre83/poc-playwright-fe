@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.0](https://github.com/mistre83/poc-playwright-fe/compare/v1.2.0...v1.3.0) (2026-04-12)
+
+
+### Features
+
+* test ([#21](https://github.com/mistre83/poc-playwright-fe/issues/21)) ([253d70a](https://github.com/mistre83/poc-playwright-fe/commit/253d70a836268bc7f5265ba4c98a89147496773c))
+* update page title to My Todo List ([#20](https://github.com/mistre83/poc-playwright-fe/issues/20)) ([b762ca2](https://github.com/mistre83/poc-playwright-fe/commit/b762ca2ce2362253cd08b54435738120b4e1bf3c))
+
 ## [1.2.0](https://github.com/mistre83/poc-playwright-fe/compare/v1.1.0...v1.2.0) (2026-04-12)
 
 
