@@ -1,0 +1,130 @@
+name: Build & Deploy Staging
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    name: Build & push to ECR
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      short_sha: ${{ steps.sha.outputs.short_sha }}
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: eu-south-1
+
+      - name: Compute short SHA
+        id: sha
+        run: |
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          echo "short_sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
+          echo "IMAGE_TAG=sha-${SHORT_SHA}" >> $GITHUB_ENV
+
+      - name: Start CodeBuild and wait for completion
+        uses: aws-actions/aws-codebuild-run-build@v1
+        with:
+          project-name: poc-playwright-build
+          disable-source-override: true
+          env-vars-for-codebuild: |
+            IMAGE_TAG
+
+  deploy:
+    name: Deploy to staging
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: eu-south-1
+
+      - name: Derive resource names
+        id: names
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          PROJECT="poc-playwright"
+          ENV="staging"
+          echo "ecr_registry=${ACCOUNT_ID}.dkr.ecr.eu-south-1.amazonaws.com" >> $GITHUB_OUTPUT
+          echo "ecr_repo=${PROJECT}-fe"        >> $GITHUB_OUTPUT
+          echo "ecs_cluster=${PROJECT}-${ENV}" >> $GITHUB_OUTPUT
+          echo "ecs_service=${PROJECT}-${ENV}" >> $GITHUB_OUTPUT
+          echo "task_family=${PROJECT}-${ENV}" >> $GITHUB_OUTPUT
+          echo "alb_name=${PROJECT}-${ENV}"    >> $GITHUB_OUTPUT
+
+      - name: Read ALB DNS
+        id: alb
+        run: |
+          ALB_DNS=$(aws elbv2 describe-load-balancers \
+            --names "${{ steps.names.outputs.alb_name }}" \
+            --query 'LoadBalancers[0].DNSName' --output text)
+          echo "alb_dns=${ALB_DNS}" >> $GITHUB_OUTPUT
+
+      - name: Register new ECS task definition
+        id: task_def
+        run: |
+          IMAGE="${{ steps.names.outputs.ecr_registry }}/${{ steps.names.outputs.ecr_repo }}:sha-${{ needs.build.outputs.short_sha }}"
+
+          NEW_TASK_DEF=$(aws ecs describe-task-definition \
+            --task-definition "${{ steps.names.outputs.task_family }}" \
+            --query 'taskDefinition' --output json | \
+            jq --arg IMAGE "${IMAGE}" \
+              'del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy) |
+               .containerDefinitions[0].image = $IMAGE')
+
+          NEW_ARN=$(aws ecs register-task-definition \
+            --cli-input-json "${NEW_TASK_DEF}" \
+            --query 'taskDefinition.taskDefinitionArn' --output text)
+
+          echo "task_def_arn=${NEW_ARN}" >> $GITHUB_OUTPUT
+
+      - name: Deploy to ECS staging
+        run: |
+          aws ecs update-service \
+            --cluster "${{ steps.names.outputs.ecs_cluster }}" \
+            --service "${{ steps.names.outputs.ecs_service }}" \
+            --task-definition "${{ steps.task_def.outputs.task_def_arn }}" \
+            --region eu-south-1 > /dev/null
+
+      - name: Wait for service stability
+        run: |
+          aws ecs wait services-stable \
+            --cluster "${{ steps.names.outputs.ecs_cluster }}" \
+            --services "${{ steps.names.outputs.ecs_service }}" \
+            --region eu-south-1
+
+      - name: Generate GitHub App token
+        id: app_token
+        uses: tibdex/github-app-token@v2
+        with:
+          app_id: ${{ secrets.APP_ID }}
+          private_key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Dispatch E2E smoke tests
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.app_token.outputs.token }}
+          script: |
+            await github.rest.repos.createDispatchEvent({
+              owner: context.repo.owner,
+              repo: 'e2e-playwright',
+              event_type: 'staging-deployed',
+              client_payload: {
+                base_url: 'http://${{ steps.alb.outputs.alb_dns }}',
+                sha: '${{ needs.build.outputs.short_sha }}',
+                environment: 'staging',
+                frontend_repo: `${context.repo.owner}/${context.repo.repo}`
+              }
+            })
