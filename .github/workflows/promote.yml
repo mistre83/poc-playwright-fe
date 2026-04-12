@@ -8,31 +8,169 @@ on:
         required: true
         type: choice
         options:
-          - dev
           - staging
-          - production
-      version:
-        description: 'Versione da promuovere (es. sha commit o tag)'
-        required: true
-        default: 'latest'
 
 jobs:
   promote:
-    name: 'Deploy ${{ inputs.version }} → ${{ inputs.environment }}'
+    name: Deploy to ${{ inputs.environment }}
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+      deployments: write
     environment:
       name: ${{ inputs.environment }}
-      url: https://d1xt02c9msoncr.cloudfront.net
 
     steps:
-      - name: 'Simula promote su ${{ inputs.environment }}'
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: eu-south-1
+
+      - name: Derive resource names
+        id: names
         run: |
-          echo "▶ Promuovo versione: ${{ inputs.version }}"
-          echo "▶ Ambiente target:   ${{ inputs.environment }}"
-          echo "▶ Avviato da:        ${{ github.actor }}"
-          echo "▶ Timestamp:         $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-          echo ""
-          echo "In un setup reale qui andrebbero i comandi per:"
-          echo "  - Pullare l'artifact già buildato (da S3, ECR, GitHub Packages...)"
-          echo "  - Deployarlo sull'ambiente ${{ inputs.environment }}"
-          echo "  - Aggiornare le variabili di configurazione per l'ambiente"
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          PROJECT="poc-playwright"
+          ENV="${{ inputs.environment }}"
+          echo "account_id=${ACCOUNT_ID}"          >> $GITHUB_OUTPUT
+          echo "ecr_registry=${ACCOUNT_ID}.dkr.ecr.eu-south-1.amazonaws.com" >> $GITHUB_OUTPUT
+          echo "ecr_repo=${PROJECT}-fe"             >> $GITHUB_OUTPUT
+          echo "ecs_cluster=${PROJECT}-${ENV}"      >> $GITHUB_OUTPUT
+          echo "ecs_service=${PROJECT}-${ENV}"      >> $GITHUB_OUTPUT
+          echo "task_family=${PROJECT}-${ENV}"      >> $GITHUB_OUTPUT
+          echo "alb_name=${PROJECT}-${ENV}"           >> $GITHUB_OUTPUT
+          echo "ssm_pending_sha=/${PROJECT}/production/pending-sha" >> $GITHUB_OUTPUT
+
+      - name: Find release-please chore PR
+        id: release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: prs } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+            });
+
+            const chorePR = prs.find(pr =>
+              pr.labels.some(l => l.name === 'autorelease: pending')
+            );
+
+            if (!chorePR) {
+              core.setFailed('Nessuna release pending trovata — esegui prima un conventional commit su main.');
+              return;
+            }
+
+            const sha = chorePR.base.sha.substring(0, 7);
+            core.info(`Chore PR #${chorePR.number} trovata — SHA: ${sha}`);
+            core.setOutput('sha', sha);
+            core.setOutput('pr_number', String(chorePR.number));
+
+      - name: Verify image exists in ECR
+        run: |
+          IMAGE_TAG="sha-${{ steps.release.outputs.sha }}"
+          aws ecr describe-images \
+            --repository-name "${{ steps.names.outputs.ecr_repo }}" \
+            --image-ids imageTag="${IMAGE_TAG}" \
+            --region eu-south-1 > /dev/null || {
+            echo "::error::Immagine ${IMAGE_TAG} non trovata in ECR. Verifica che la build sia completata."
+            exit 1
+          }
+
+      - name: Read ALB DNS
+        id: alb
+        run: |
+          ALB_DNS=$(aws elbv2 describe-load-balancers \
+            --names "${{ steps.names.outputs.alb_name }}" \
+            --query 'LoadBalancers[0].DNSName' --output text)
+          echo "alb_dns=${ALB_DNS}" >> $GITHUB_OUTPUT
+
+      - name: Register new ECS task definition
+        id: task_def
+        run: |
+          IMAGE="${{ steps.names.outputs.ecr_registry }}/${{ steps.names.outputs.ecr_repo }}:sha-${{ steps.release.outputs.sha }}"
+
+          NEW_TASK_DEF=$(aws ecs describe-task-definition \
+            --task-definition "${{ steps.names.outputs.task_family }}" \
+            --query 'taskDefinition' --output json | \
+            jq --arg IMAGE "${IMAGE}" \
+              'del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy) |
+               .containerDefinitions[0].image = $IMAGE')
+
+          NEW_ARN=$(aws ecs register-task-definition \
+            --cli-input-json "${NEW_TASK_DEF}" \
+            --query 'taskDefinition.taskDefinitionArn' --output text)
+
+          echo "task_def_arn=${NEW_ARN}" >> $GITHUB_OUTPUT
+
+      - name: Deploy to ECS ${{ inputs.environment }}
+        run: |
+          aws ecs update-service \
+            --cluster "${{ steps.names.outputs.ecs_cluster }}" \
+            --service "${{ steps.names.outputs.ecs_service }}" \
+            --task-definition "${{ steps.task_def.outputs.task_def_arn }}" \
+            --region eu-south-1 > /dev/null
+
+      - name: Wait for service stability
+        run: |
+          aws ecs wait services-stable \
+            --cluster "${{ steps.names.outputs.ecs_cluster }}" \
+            --services "${{ steps.names.outputs.ecs_service }}" \
+            --region eu-south-1
+
+      - name: Update GitHub Environment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const deployment = await github.rest.repos.createDeployment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: '${{ steps.release.outputs.sha }}',
+              environment: '${{ inputs.environment }}',
+              auto_merge: false,
+              required_contexts: [],
+              description: 'sha-${{ steps.release.outputs.sha }}'
+            });
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: deployment.data.id,
+              state: 'success',
+              environment_url: 'http://${{ steps.alb.outputs.alb_dns }}',
+              description: 'Deploy completato'
+            });
+
+      - name: Save approved SHA to SSM
+        if: inputs.environment == 'staging'
+        run: |
+          aws ssm put-parameter \
+            --name "${{ steps.names.outputs.ssm_pending_sha }}" \
+            --value "${{ steps.release.outputs.sha }}" \
+            --type String \
+            --overwrite
+
+      - name: Generate GitHub App token
+        id: app_token
+        uses: tibdex/github-app-token@v2
+        with:
+          app_id: ${{ secrets.APP_ID }}
+          private_key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Dispatch E2E tests
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.app_token.outputs.token }}
+          script: |
+            await github.rest.repos.createDispatchEvent({
+              owner: context.repo.owner,
+              repo: 'e2e-playwright',
+              event_type: 'staging-deployed',
+              client_payload: {
+                base_url: 'http://${{ steps.alb.outputs.alb_dns }}',
+                sha: '${{ steps.release.outputs.sha }}',
+                environment: '${{ inputs.environment }}',
+                frontend_repo: `${context.repo.owner}/${context.repo.repo}`
+              }
+            });
