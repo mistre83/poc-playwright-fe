@@ -39,14 +39,47 @@ jobs:
           echo "task_family=${PROJECT}-production"                                 >> $GITHUB_OUTPUT
           echo "ssm_pending_sha=/${PROJECT}/production/pending-sha"                >> $GITHUB_OUTPUT
 
-      - name: Read approved SHA from SSM
+      - name: Read and validate approval token from SSM
         id: pending
         run: |
-          SHA=$(aws ssm get-parameter \
-            --name "${{ steps.names.outputs.ssm_pending_sha }}" \
-            --query 'Parameter.Value' --output text)
+          PARAM=$(aws ssm get-parameter \
+            --name "/poc-playwright/production/pending-approval" \
+            --query 'Parameter.Value' --output text 2>/dev/null) || {
+            echo "::error::No approval token found in SSM. Run promote.yml and ensure smoke tests pass before deploying to production."
+            exit 1
+          }
+
+          SHA=$(echo "${PARAM}" | jq -r '.sha')
+          APPROVED_AT=$(echo "${PARAM}" | jq -r '.approved_at')
+          SMOKE_RUN_URL=$(echo "${PARAM}" | jq -r '.smoke_run_url')
+
+          if [ -z "${SHA}" ] || [ "${SHA}" = "null" ]; then
+            echo "::error::Approval token is malformed — missing sha field."
+            exit 1
+          fi
+
+          # Validate approval is not stale (max 7 days)
+          APPROVED_TS=$(date -d "${APPROVED_AT}" +%s 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%SZ" "${APPROVED_AT}" +%s)
+          NOW_TS=$(date +%s)
+          AGE_DAYS=$(( (NOW_TS - APPROVED_TS) / 86400 ))
+          if [ "${AGE_DAYS}" -gt 7 ]; then
+            echo "::error::Approval token is stale (${AGE_DAYS} days old). Re-run promote.yml to generate a fresh approval."
+            exit 1
+          fi
+
           echo "sha=${SHA}" >> $GITHUB_OUTPUT
-          echo "Deploying image sha-${SHA} as ${{ steps.version.outputs.tag }}"
+          echo "Approval: sha=${SHA}, approved_at=${APPROVED_AT}, age=${AGE_DAYS}d, smoke_run=${SMOKE_RUN_URL}"
+
+      - name: Verify approved image exists in ECR
+        run: |
+          IMAGE_TAG="sha-${{ steps.pending.outputs.sha }}"
+          aws ecr describe-images \
+            --repository-name "${{ steps.names.outputs.ecr_repo }}" \
+            --image-ids imageTag="${IMAGE_TAG}" \
+            --region eu-south-1 > /dev/null || {
+            echo "::error::Image ${IMAGE_TAG} not found in ECR. The approved image may have been deleted."
+            exit 1
+          }
 
       - name: Login to ECR
         run: |

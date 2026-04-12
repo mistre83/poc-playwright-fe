@@ -41,7 +41,6 @@ jobs:
           echo "ecs_service=${PROJECT}-${ENV}"      >> $GITHUB_OUTPUT
           echo "task_family=${PROJECT}-${ENV}"      >> $GITHUB_OUTPUT
           echo "alb_name=${PROJECT}-${ENV}"           >> $GITHUB_OUTPUT
-          echo "ssm_pending_sha=/${PROJECT}/production/pending-sha" >> $GITHUB_OUTPUT
 
       - name: Find release-please chore PR
         id: release
@@ -145,15 +144,6 @@ jobs:
               environment_url: 'http://${{ steps.alb.outputs.alb_dns }}',
               description: 'Deploy completato'
             });
-
-      - name: Save approved SHA to SSM
-        if: inputs.environment == 'staging'
-        run: |
-          aws ssm put-parameter \
-            --name "${{ steps.names.outputs.ssm_pending_sha }}" \
-            --value "${{ steps.release.outputs.sha }}" \
-            --type String \
-            --overwrite
 
       - name: Generate GitHub App token
         id: app_token
