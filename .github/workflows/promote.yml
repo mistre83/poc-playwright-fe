@@ -1,4 +1,4 @@
-name: Promote
+name: Promote (manual escape hatch)
 
 on:
   workflow_dispatch:
@@ -12,7 +12,7 @@ on:
 
 jobs:
   promote:
-    name: Deploy to ${{ inputs.environment }}
+    name: Re-deploy to ${{ inputs.environment }}
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -28,57 +28,31 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: eu-south-1
 
+      - name: Compute short SHA
+        id: sha
+        run: echo "short_sha=${GITHUB_SHA:0:7}" >> $GITHUB_OUTPUT
+
       - name: Derive resource names
         id: names
         run: |
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
           PROJECT="poc-playwright"
           ENV="${{ inputs.environment }}"
-          echo "account_id=${ACCOUNT_ID}"          >> $GITHUB_OUTPUT
           echo "ecr_registry=${ACCOUNT_ID}.dkr.ecr.eu-south-1.amazonaws.com" >> $GITHUB_OUTPUT
-          echo "ecr_repo=${PROJECT}-fe"             >> $GITHUB_OUTPUT
-          echo "ecs_cluster=${PROJECT}-${ENV}"      >> $GITHUB_OUTPUT
-          echo "ecs_service=${PROJECT}-${ENV}"      >> $GITHUB_OUTPUT
-          echo "task_family=${PROJECT}-${ENV}"      >> $GITHUB_OUTPUT
-          echo "alb_name=${PROJECT}-${ENV}"           >> $GITHUB_OUTPUT
-
-      - name: Find release-please chore PR
-        id: release
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const { data: prs } = await github.rest.pulls.list({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: 'open',
-            });
-
-            const chorePR = prs.find(pr =>
-              pr.labels.some(l => l.name === 'autorelease: pending')
-            );
-
-            if (!chorePR) {
-              core.setFailed('Nessuna release pending trovata — esegui prima un conventional commit su main.');
-              return;
-            }
-
-            const fullSha = chorePR.base.sha;
-            const shortSha = fullSha.substring(0, 7);
-            const headSha = chorePR.head.sha;
-            core.info(`Chore PR #${chorePR.number} trovata — SHA: ${shortSha}, head: ${headSha}`);
-            core.setOutput('sha', shortSha);
-            core.setOutput('full_sha', fullSha);
-            core.setOutput('head_sha', headSha);
-            core.setOutput('pr_number', String(chorePR.number));
+          echo "ecr_repo=${PROJECT}-fe"        >> $GITHUB_OUTPUT
+          echo "ecs_cluster=${PROJECT}-${ENV}" >> $GITHUB_OUTPUT
+          echo "ecs_service=${PROJECT}-${ENV}" >> $GITHUB_OUTPUT
+          echo "task_family=${PROJECT}-${ENV}" >> $GITHUB_OUTPUT
+          echo "alb_name=${PROJECT}-${ENV}"    >> $GITHUB_OUTPUT
 
       - name: Verify image exists in ECR
         run: |
-          IMAGE_TAG="sha-${{ steps.release.outputs.sha }}"
+          IMAGE_TAG="sha-${{ steps.sha.outputs.short_sha }}"
           aws ecr describe-images \
             --repository-name "${{ steps.names.outputs.ecr_repo }}" \
             --image-ids imageTag="${IMAGE_TAG}" \
             --region eu-south-1 > /dev/null || {
-            echo "::error::Immagine ${IMAGE_TAG} non trovata in ECR. Verifica che la build sia completata."
+            echo "::error::Image ${IMAGE_TAG} not found in ECR. Ensure the build completed for this commit."
             exit 1
           }
 
@@ -93,7 +67,7 @@ jobs:
       - name: Register new ECS task definition
         id: task_def
         run: |
-          IMAGE="${{ steps.names.outputs.ecr_registry }}/${{ steps.names.outputs.ecr_repo }}:sha-${{ steps.release.outputs.sha }}"
+          IMAGE="${{ steps.names.outputs.ecr_registry }}/${{ steps.names.outputs.ecr_repo }}:sha-${{ steps.sha.outputs.short_sha }}"
 
           NEW_TASK_DEF=$(aws ecs describe-task-definition \
             --task-definition "${{ steps.names.outputs.task_family }}" \
@@ -123,28 +97,6 @@ jobs:
             --services "${{ steps.names.outputs.ecs_service }}" \
             --region eu-south-1
 
-      - name: Update GitHub Environment
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const deployment = await github.rest.repos.createDeployment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              ref: '${{ steps.release.outputs.sha }}',
-              environment: '${{ inputs.environment }}',
-              auto_merge: false,
-              required_contexts: [],
-              description: 'sha-${{ steps.release.outputs.sha }}'
-            });
-            await github.rest.repos.createDeploymentStatus({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              deployment_id: deployment.data.id,
-              state: 'success',
-              environment_url: 'http://${{ steps.alb.outputs.alb_dns }}',
-              description: 'Deploy completato'
-            });
-
       - name: Generate GitHub App token
         id: app_token
         uses: tibdex/github-app-token@v2
@@ -152,7 +104,7 @@ jobs:
           app_id: ${{ secrets.APP_ID }}
           private_key: ${{ secrets.APP_PRIVATE_KEY }}
 
-      - name: Dispatch E2E tests
+      - name: Dispatch E2E smoke tests
         uses: actions/github-script@v7
         with:
           github-token: ${{ steps.app_token.outputs.token }}
@@ -163,10 +115,8 @@ jobs:
               event_type: 'staging-deployed',
               client_payload: {
                 base_url: 'http://${{ steps.alb.outputs.alb_dns }}',
-                sha: '${{ steps.release.outputs.sha }}',
-                full_sha: '${{ steps.release.outputs.full_sha }}',
-                head_sha: '${{ steps.release.outputs.head_sha }}',
+                sha: '${{ steps.sha.outputs.short_sha }}',
                 environment: '${{ inputs.environment }}',
                 frontend_repo: `${context.repo.owner}/${context.repo.repo}`
               }
-            });
+            })

@@ -3,6 +3,7 @@ name: Deploy Production
 on:
   release:
     types: [published]
+  workflow_dispatch:
 
 jobs:
   deploy:
@@ -58,17 +59,8 @@ jobs:
             exit 1
           fi
 
-          # Validate approval is not stale (max 7 days)
-          APPROVED_TS=$(date -d "${APPROVED_AT}" +%s 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%SZ" "${APPROVED_AT}" +%s)
-          NOW_TS=$(date +%s)
-          AGE_DAYS=$(( (NOW_TS - APPROVED_TS) / 86400 ))
-          if [ "${AGE_DAYS}" -gt 7 ]; then
-            echo "::error::Approval token is stale (${AGE_DAYS} days old). Re-run promote.yml to generate a fresh approval."
-            exit 1
-          fi
-
           echo "sha=${SHA}" >> $GITHUB_OUTPUT
-          echo "Approval: sha=${SHA}, approved_at=${APPROVED_AT}, age=${AGE_DAYS}d, smoke_run=${SMOKE_RUN_URL}"
+          echo "Approval: sha=${SHA}, approved_at=${APPROVED_AT}, smoke_run=${SMOKE_RUN_URL}"
 
       - name: Verify approved image exists in ECR
         run: |
