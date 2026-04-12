@@ -65,9 +65,11 @@ jobs:
 
             const fullSha = chorePR.base.sha;
             const shortSha = fullSha.substring(0, 7);
-            core.info(`Chore PR #${chorePR.number} trovata — SHA: ${shortSha}`);
+            const headSha = chorePR.head.sha;
+            core.info(`Chore PR #${chorePR.number} trovata — SHA: ${shortSha}, head: ${headSha}`);
             core.setOutput('sha', shortSha);
             core.setOutput('full_sha', fullSha);
+            core.setOutput('head_sha', headSha);
             core.setOutput('pr_number', String(chorePR.number));
 
       - name: Verify image exists in ECR
@@ -173,6 +175,7 @@ jobs:
                 base_url: 'http://${{ steps.alb.outputs.alb_dns }}',
                 sha: '${{ steps.release.outputs.sha }}',
                 full_sha: '${{ steps.release.outputs.full_sha }}',
+                head_sha: '${{ steps.release.outputs.head_sha }}',
                 environment: '${{ inputs.environment }}',
                 frontend_repo: `${context.repo.owner}/${context.repo.repo}`
               }
