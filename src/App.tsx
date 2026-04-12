@@ -23,7 +23,7 @@ export default function App() {
 
   return (
     <main>
-      <h1 style={{ marginBottom: '1.5rem', fontSize: '1.75rem' }}>Todo List</h1>
+      <h1 style={{ marginBottom: '1.5rem', fontSize: '1.75rem' }}>Todo List test</h1>
       <TodoInput onAdd={addTodo} />
       <TodoList todos={todos} onToggle={toggleTodo} onDelete={deleteTodo} />
     </main>
