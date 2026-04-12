@@ -32,11 +32,12 @@ jobs:
         with:
           github-token: ${{ steps.app_token.outputs.token }}
           script: |
-            await github.rest.repos.createDispatchEvent({
+            await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              event_type: 'release-published',
-              client_payload: {
+              workflow_id: 'deploy-production.yml',
+              ref: '${{ steps.release.outputs.tag_name }}',
+              inputs: {
                 tag_name: '${{ steps.release.outputs.tag_name }}'
               }
             })
