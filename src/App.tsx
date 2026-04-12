@@ -7,7 +7,8 @@ export default function App() {
   const [todos, setTodos] = useState<Todo[]>([])
 
   function addTodo(text: string) {
-    setTodos(prev => [...prev, { id: crypto.randomUUID(), text, completed: false }])
+    const id = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
+    setTodos(prev => [...prev, { id, text, completed: false }])
   }
 
   function toggleTodo(id: string) {
