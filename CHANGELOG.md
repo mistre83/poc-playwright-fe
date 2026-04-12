@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.0](https://github.com/mistre83/poc-playwright-fe/compare/v1.4.0...v1.5.0) (2026-04-12)
+
+
+### Features
+
+* test ([#28](https://github.com/mistre83/poc-playwright-fe/issues/28)) ([721c007](https://github.com/mistre83/poc-playwright-fe/commit/721c007fba81147f9db21345132f992c51e35c7c))
+
 ## [1.4.0](https://github.com/mistre83/poc-playwright-fe/compare/v1.3.0...v1.4.0) (2026-04-12)
 
 
