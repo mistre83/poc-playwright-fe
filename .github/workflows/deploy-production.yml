@@ -167,7 +167,7 @@ jobs:
             const deployment = await github.rest.repos.createDeployment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              ref: '${{ github.event.release.tag_name }}',
+              ref: '${{ steps.version.outputs.tag }}',
               environment: 'production',
               auto_merge: false,
               required_contexts: [],
