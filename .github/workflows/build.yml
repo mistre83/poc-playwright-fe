@@ -26,6 +26,7 @@ jobs:
         uses: aws-actions/aws-codebuild-run-build@v1
         with:
           project-name: poc-playwright-build
+          disable-source-override: true
           env-vars-for-codebuild: |
             IMAGE_TAG
         env:
