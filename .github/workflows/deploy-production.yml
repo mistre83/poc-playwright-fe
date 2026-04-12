@@ -1,9 +1,13 @@
 name: Deploy Production
 
 on:
-  release:
-    types: [published]
+  repository_dispatch:
+    types: [release-published]
   workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag da deployare (es. v1.0.0)'
+        required: true
 
 jobs:
   deploy:
@@ -19,7 +23,12 @@ jobs:
     steps:
       - name: Extract release version
         id: version
-        run: echo "tag=${{ github.event.release.tag_name }}" >> $GITHUB_OUTPUT
+        run: |
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            echo "tag=${{ github.event.client_payload.tag_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${{ inputs.tag_name }}" >> $GITHUB_OUTPUT
+          fi
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
