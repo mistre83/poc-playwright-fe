@@ -6,8 +6,6 @@ on:
     paths-ignore:
       - 'CHANGELOG.md'
       - '.release-please-manifest.json'
-      - 'package.json'
-      - 'package-lock.json'
 
 jobs:
   build:
