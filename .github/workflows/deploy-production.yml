@@ -83,7 +83,6 @@ jobs:
 
       - name: Re-tag image for production
         run: |
-          REGISTRY="${{ steps.names.outputs.ecr_registry }}"
           REPO="${{ steps.names.outputs.ecr_repo }}"
           SOURCE_TAG="sha-${{ steps.pending.outputs.sha }}"
           VERSION="${{ steps.version.outputs.tag }}"
@@ -94,16 +93,30 @@ jobs:
             --image-ids imageTag="${SOURCE_TAG}" \
             --query 'images[0].imageManifest' --output text)
 
-          # Push same manifest with version and latest tags
-          aws ecr put-image \
+          SOURCE_DIGEST=$(aws ecr describe-images \
             --repository-name "${REPO}" \
-            --image-tag "${VERSION}" \
-            --image-manifest "${MANIFEST}"
+            --image-ids imageTag="${SOURCE_TAG}" \
+            --query 'imageDetails[0].imageDigest' --output text)
 
-          aws ecr put-image \
-            --repository-name "${REPO}" \
-            --image-tag "latest" \
-            --image-manifest "${MANIFEST}"
+          tag_or_skip() {
+            local TAG="$1"
+            EXISTING=$(aws ecr describe-images \
+              --repository-name "${REPO}" \
+              --image-ids imageTag="${TAG}" \
+              --query 'imageDetails[0].imageDigest' --output text 2>/dev/null || echo "")
+            if [ "${EXISTING}" = "${SOURCE_DIGEST}" ]; then
+              echo "Tag ${TAG} already points to same digest — skipping."
+            else
+              aws ecr put-image \
+                --repository-name "${REPO}" \
+                --image-tag "${TAG}" \
+                --image-manifest "${MANIFEST}"
+              echo "Tag ${TAG} applied."
+            fi
+          }
+
+          tag_or_skip "${VERSION}"
+          tag_or_skip "latest"
 
       - name: Register new ECS task definition
         id: task_def
